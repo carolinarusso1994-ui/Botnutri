@@ -1,43 +1,16 @@
-// Estado por usuario en memoria (se resetea al reiniciar el servidor)
-// Para producción se puede reemplazar por Redis o similar
-const store = {};
-
-export function getUserState(from) {
-  if (!store[from]) {
-    store[from] = {
-      history:    [],   // historial de conversación con Claude
-      fase_ciclo: '',
-      energia:    '',
-      sueno_h:    '',
-      agua_ml:    0,
-    };
+{
+  "name": "carol-nutrition-bot",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "googleapis": "^144.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
-  return store[from];
 }
-
-export function setUserState(from, state) {
-  store[from] = state;
-}
-
-// Resetea el estado diario a medianoche
-function scheduleDailyReset() {
-  const now  = new Date();
-  const next = new Date(now);
-  next.setHours(24, 0, 0, 0); // próxima medianoche
-  const ms = next - now;
-  setTimeout(() => {
-    Object.keys(store).forEach(key => {
-      store[key] = {
-        history:    [],
-        fase_ciclo: store[key].fase_ciclo || '', // mantiene la fase del ciclo
-        energia:    '',
-        sueno_h:    '',
-        agua_ml:    0,
-      };
-    });
-    console.log('Estado diario reseteado');
-    scheduleDailyReset();
-  }, ms);
-}
-
-scheduleDailyReset();
