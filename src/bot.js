@@ -3,7 +3,7 @@ import { getUserState, setUserState } from './state.js';
 
 const OR_KEY = process.env.OPENROUTER_API_KEY;
 const OR_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const OR_MODEL = 'meta-llama/llama-3.3-8b-instruct:free';
+const OR_MODEL = 'mistralai/mistral-7b-instruct:free';
 
 // ── Perfil de Carol (editá estos valores) ──────────────────────────
 const CAROL = {
