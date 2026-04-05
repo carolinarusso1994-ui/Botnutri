@@ -2,35 +2,21 @@ import { appendToSheet, getDailySummary } from './sheets.js';
 import { getUserState, setUserState } from './state.js';
 
 const OR_KEY = process.env.OPENROUTER_API_KEY;
-const OR_URL = 'https://openrouter.ai/api/v1/chat/completions';
-
-// Lista de modelos gratuitos — prueba en orden hasta que uno funcione
-const FREE_MODELS = [
-  'meta-llama/llama-3.3-70b-instruct:free',
-  'deepseek/deepseek-chat:free',
-  'google/gemma-3-27b-it:free',
-  'qwen/qwen-2.5-72b-instruct:free',
-  'microsoft/phi-4:free',
-];
 
 const CAROL = {
-  tdee_kcal:    2100,
-  meta_prot_g:  120,
-  meta_carb_g:  220,
-  meta_gras_g:  65,
-  meta_agua_ml: 2500,
+  tdee_kcal: 2100, meta_prot_g: 120, meta_carb_g: 220,
+  meta_gras_g: 65, meta_agua_ml: 2500,
 };
 
-const SYSTEM = `Sos el asistente nutricional de Carol, atleta argentina (running, ciclismo, gym).
-Metas diarias: proteína ${CAROL.meta_prot_g}g, carbos ${CAROL.meta_carb_g}g, grasas ${CAROL.meta_gras_g}g, agua ${CAROL.meta_agua_ml}ml, ${CAROL.tdee_kcal} kcal.
-
-Cuando Carol describe una comida, estimás los macros y confirmás el registro.
-Respondé en español, tono cálido, sin markdown ni asteriscos.
+const SYSTEM = `Sos el asistente nutricional de Carol, atleta argentina.
+Metas diarias: proteina ${CAROL.meta_prot_g}g, carbos ${CAROL.meta_carb_g}g, grasas ${CAROL.meta_gras_g}g, agua ${CAROL.meta_agua_ml}ml, ${CAROL.tdee_kcal} kcal.
+Cuando describe una comida, estimas los macros y confirmas el registro.
+Responde en español, tono calido, sin markdown ni asteriscos.
 Formato al registrar:
 ✓ [Alimento] registrado
 📊 ~[kcal] kcal | P: [g]g | C: [g]g | G: [g]g`;
 
-const EXTRACT_SYSTEM = `Extraé datos nutricionales y devolvé SOLO JSON sin explicaciones ni markdown.
+const EXTRACT_SYSTEM = `Extrae datos nutricionales y devuelve SOLO JSON sin explicaciones.
 Comida: {"tipo":"comida","datos":[{"alimento":"nombre","gramos":null,"kcal":0,"proteina_g":0,"carbos_g":0,"grasas_g":0,"comida":"desayuno|almuerzo|merienda|cena|snack"}]}
 Agua: {"tipo":"agua","ml":0}
 Sueno: {"tipo":"sueno","horas":0}
@@ -38,42 +24,30 @@ Energia: {"tipo":"energia","nivel":"alta|media|baja"}
 Ciclo: {"tipo":"ciclo","fase":"menstruacion|folicular|ovulacion|lutea"}
 Nada: {"tipo":"ninguno"}`;
 
-async function callAI(messages, maxTokens = 600) {
-  let lastError = null;
-  for (const model of FREE_MODELS) {
-    try {
-      const res = await fetch(OR_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${OR_KEY}`,
-          'HTTP-Referer': 'https://botnutri-z3la.onrender.com',
-        },
-        body: JSON.stringify({ model, messages, max_tokens: maxTokens, temperature: 0.7 }),
-      });
-      const data = await res.json();
-      if (data.error) {
-        lastError = data.error.message;
-        console.log(`Modelo ${model} falló: ${lastError}`);
-        continue;
-      }
-      const text = data.choices?.[0]?.message?.content;
-      if (text) {
-        console.log(`Modelo ${model} OK`);
-        return text;
-      }
-    } catch (e) {
-      lastError = e.message;
-      console.log(`Modelo ${model} error: ${lastError}`);
-    }
-  }
-  throw new Error(`Todos los modelos fallaron. Último error: ${lastError}`);
+async function callAI(messages, maxTokens = 400) {
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${OR_KEY}`,
+      'HTTP-Referer': 'https://botnutri-z3la.onrender.com',
+    },
+    body: JSON.stringify({
+      model: 'openrouter/auto',
+      messages,
+      max_tokens: maxTokens,
+      temperature: 0.7,
+    }),
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  return data.choices?.[0]?.message?.content || '';
 }
 
 export async function handleMessage(from, message) {
   const msg = message.trim().toLowerCase();
 
-  if (msg.includes('resumen') || msg.includes('como voy') || msg.includes('cómo voy') || msg === 'hoy') {
+  if (msg.includes('resumen') || msg.includes('como voy') || msg === 'hoy') {
     return await buildDailySummary(from);
   }
   if (msg === 'ayuda' || msg === 'help') {
@@ -83,7 +57,7 @@ export async function handleMessage(from, message) {
   const state = getUserState(from);
   const messages = [
     { role: 'system', content: SYSTEM },
-    ...state.history.slice(-10).map(h => ({ role: h.role === 'assistant' ? 'assistant' : 'user', content: h.content })),
+    ...state.history.slice(-8).map(h => ({ role: h.role, content: h.content })),
     { role: 'user', content: message },
   ];
 
@@ -94,8 +68,7 @@ export async function handleMessage(from, message) {
   if (state.history.length > 12) state.history = state.history.slice(-12);
   setUserState(from, state);
 
-  // Extraer y guardar en Sheets en segundo plano
-  extractAndSave(from, message, reply, state).catch(e => console.error('Error guardando:', e.message));
+  extractAndSave(from, message, reply, state).catch(e => console.error('Sheet error:', e.message));
 
   return reply;
 }
@@ -106,12 +79,10 @@ async function extractAndSave(from, userMessage, botReply, state) {
     { role: 'system', content: EXTRACT_SYSTEM },
     { role: 'user', content: `Hora: ${hora}\nUsuario: "${userMessage}"\nBot: "${botReply}"` },
   ];
-
-  const raw = await callAI(messages, 300);
-  const clean = raw.replace(/```json|```/g, '').trim();
+  const raw = await callAI(messages, 250);
   let data;
-  try { data = JSON.parse(clean); } catch { return; }
-  if (data.tipo === 'ninguno') return;
+  try { data = JSON.parse(raw.replace(/```json|```/g, '').trim()); } catch { return; }
+  if (!data || data.tipo === 'ninguno') return;
 
   const now = new Date();
   const fecha = now.toLocaleDateString('es-AR', { year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -138,12 +109,12 @@ async function buildDailySummary(from) {
   try {
     const summary = await getDailySummary();
     const state = getUserState(from);
-    if (!summary || summary.kcal === 0) return 'Todavia no registraste nada hoy. Contame que comiste 🥗';
+    if (!summary || summary.kcal === 0) return 'Todavia no registraste nada hoy 🥗';
     const restante = CAROL.tdee_kcal - summary.kcal;
     let msg = `Resumen de hoy 📋\n\nCalorias: ${Math.round(summary.kcal)} / ${CAROL.tdee_kcal} kcal\nProteina: ${Math.round(summary.proteina)}g / ${CAROL.meta_prot_g}g\nCarbos: ${Math.round(summary.carbos)}g\nGrasas: ${Math.round(summary.grasas)}g\n`;
     if (summary.agua > 0) msg += `Agua: ${Math.round(summary.agua)}ml\n`;
     if (state.sueno_h) msg += `Sueno: ${state.sueno_h}h\n`;
-    msg += restante > 0 ? `\nTe quedan ~${Math.round(restante)} kcal para el dia.` : `\nAlcanzaste tu meta calorica ✓`;
+    msg += restante > 0 ? `\nTe quedan ~${Math.round(restante)} kcal.` : `\nMeta calorica alcanzada ✓`;
     return msg;
-  } catch { return 'No pude obtener el resumen. Intenta de nuevo.'; }
+  } catch { return 'No pude obtener el resumen.'; }
 }
